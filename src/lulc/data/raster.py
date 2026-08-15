@@ -63,25 +63,33 @@ def normalize(
     data: np.ndarray,
     means: list[float] | None = None,
     stds: list[float] | None = None,
+    inplace: bool = True,
 ) -> tuple[np.ndarray, list[float], list[float]]:
     """Band-wise z-score normalization.
 
     If ``means``/``stds`` are omitted they are computed from ``data`` itself
     and returned so the caller can log or reuse them.
+
+    ``inplace`` defaults to True: a full Sentinel-2 granule is ~1.5 GB as
+    float32, and copying it doubles peak memory for no benefit, since callers
+    never need the raw array afterwards. Pass False to keep the input intact.
     """
     if means is None or stds is None:
         means, stds = compute_norm_stats(data)
 
-    out = data.copy()
+    out = data if inplace else data.copy()
     for b in range(data.shape[0]):
-        out[b] = (data[b] - means[b]) / stds[b]
+        out[b] -= means[b]
+        out[b] /= stds[b]
     return out, means, stds
 
 
 def read_raster(path: str | os.PathLike) -> tuple[np.ndarray, RasterMeta]:
     """Read a multi-band GeoTIFF as float32 plus its georeferencing."""
     with rasterio.open(path) as src:
-        data = src.read().astype("float32")
+        # out_dtype avoids holding the native-dtype array and the float32 copy
+        # at the same time - on a full S2 granule that peak is ~2.4 GB.
+        data = src.read(out_dtype="float32")
         info = RasterMeta(
             meta=src.meta.copy(),
             transform=src.transform,
@@ -150,9 +158,11 @@ def load_masks(
             )
         return None
 
+    # uint8, not int64: labels are 0-5, and int64 would cost 8x the memory
+    # (~1.9 GB for 3969 patches vs ~240 MB). The dataset casts per patch.
     masks = np.stack(
-        [remap_labels(rasterio.open(f).read(1).astype("int64")) for f in mask_files]
-    )
+        [remap_labels(rasterio.open(f).read(1)) for f in mask_files]
+    ).astype("uint8")
     if verbose:
         print(f"  Loaded {len(masks)} reference masks from {Path(mask_dir).name}/")
     return masks
