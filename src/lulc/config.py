@@ -25,7 +25,7 @@ class TrainConfig:
     """Hyperparameters and paths for the training pipeline."""
 
     image_tif: Path = Path("data/raw/city_s2_6band.tif")
-    mask_dir: Path | None = Path("data/samples/masks")
+    mask_dir: Path | None = Path("data/patches/masks")
     output_dir: Path = Path("outputs/train")
 
     patch_size: int = 256
@@ -39,6 +39,8 @@ class TrainConfig:
     num_bands: int = 6
     num_classes: int = 6
 
+    encoder_weights: str | None = "imagenet"   # None = random init (offline runs)
+    use_torchgeo: bool = True                  # SSL4EO Sentinel-2 weights
     freeze_encoder: bool = True
     encoder_warmup_batches: int = 1   # gentle unfreeze after the decoder converges
     label_smoothing: float = 0.1
