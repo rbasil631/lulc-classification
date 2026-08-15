@@ -1,431 +1,204 @@
-# LULC Mapping Pipeline — Land Use Land Cover Semantic Segmentation with Explainable AI
+# LULC Classification — Sentinel-2 Semantic Segmentation with Explainable AI
 
-A comprehensive deep learning pipeline for **Land Use Land Cover (LULC) semantic segmentation** using Sentinel-2 satellite imagery, with integrated explainable AI (XAI) analysis. This project combines state-of-the-art computer vision models with interpretability techniques to understand which spectral bands and spatial regions drive predictions.
+Pixel-wise land use / land cover mapping from Sentinel-2 imagery, using a
+UNet++ decoder over a ResNet-50 encoder pretrained on Sentinel-2 (TorchGeo
+SSL4EO), with three complementary explainability methods layered on top.
 
----
-
-## 🌍 Project Overview
-
-**Land Use Land Cover (LULC) mapping** is a fundamental geospatial task that classifies every pixel in satellite imagery into semantic categories (e.g., buildings, water, forests). This project:
-
-- **Leverages Sentinel-2 multispectral data** (6 bands: B2, B3, B4, B8, B11, B12 at 10m resolution)
-- **Uses transfer learning** with TorchGeo SSL4EO pretrained ResNet50 encoder
-- **Employs UNet++ decoder** for high-quality segmentation
-- **Includes fine-tuning** on local reference masks with early stopping
-- **Provides interpretability** via SegGradCAM, SHAP, and gradient-based attribution
-- **Outputs georeferenced GeoTIFF maps** preserving CRS and spatial alignment
-
-### Use Cases
-- Urban planning and building footprint extraction
-- Water resource monitoring
-- Forest conservation and land degradation assessment
-- Agricultural land classification
-- Environmental impact analysis
+The point of the XAI half is not decoration. A segmentation model that reports
+92% accuracy can still be reading the wrong spectral evidence — keying on SWIR
+haze instead of NIR vegetation response, say — and per-class band attribution
+is how you catch that before publishing a map someone might plan around.
 
 ---
 
-## 📊 Dataset
+## What it does
 
-### Input Data
-- **Source**: Copernicus Sentinel-2 Level-2A (Surface Reflectance)
-- **Bands**: 6 selected (Blue, Green, Red, NIR, SWIR1, SWIR2)
-- **Resolution**: 10m/pixel
-- **Temporal**: Configurable date range (e.g., 2024-01-01 to 2024-12-31)
-- **Preprocessing**: Median composite to reduce cloud cover
+- Reads a 6-band Sentinel-2 L2A composite (B2, B3, B4, B8, B11, B12 @ 10 m)
+- Normalizes **per scene**, from the scene's own valid pixels — the single
+  change that lets one checkpoint transfer to a city it never trained on
+- Fine-tunes a frozen-encoder UNet++ on local reference masks, with a
+  validation split guaranteed not to overlap any training patch
+- Scores per-class IoU / F1 and writes a confusion matrix
+- Explains predictions three ways: SegGradCAM (where), plus gradient,
+  occlusion and SHAP band attribution (which wavelengths)
+- Runs sliding-window inference over the full scene, averaging **logits**
+  across overlaps so tile boundaries don't show
+- Writes a georeferenced GeoTIFF that opens in QGIS directly over the input
 
-### Reference Masks (Optional)
-- Ground-truth annotations in GeoTIFF format
-- Expected to be in the `mask_dir` folder, one file per patch
-- Used for fine-tuning and model evaluation
-- Automatically remapped to align with training classes
+## Classes
 
-### Classes (6-class schema)
-| Class | RGB Color | Meaning |
-|-------|-----------|---------|
-| 0 | Black (0,0,0) | Background / No Data |
-| 1 | Red (255,0,0) | Building / Urban |
-| 2 | Blue (0,0,255) | Water / Aquatic |
-| 3 | Brown (165,42,42) | Barren / Exposed Soil |
-| 4 | Green (0,128,0) | Forest / Dense Vegetation |
-| 5 | Yellow (255,255,0) | Agriculture / Cropland |
+| ID | Class | Colour |
+|---:|-------|--------|
+| 0 | background | ⬛ black |
+| 1 | building | 🟥 red |
+| 2 | water | 🟦 blue |
+| 3 | barren | 🟫 brown |
+| 4 | forest | 🟩 green |
+| 5 | agriculture | 🟨 yellow |
 
----
-
-## 🏗️ Project Structure
-
-```
-minor project/
-├── final.py                    # Main training pipeline
-├── inference.py                # Inference for new AOIs
-├── final.ipynb                 # Jupyter notebook version (interactive)
-├── lulc_torchgeo_pipeline.ipynb # Alternative pipeline notebook
-├── README.md                   # This file
-├── lulc_results/               # Output directory (training run 1)
-│   └── best_model.pth          # Trained model checkpoint
-├── lulc_results12/             # Output directory (training run 2)
-│   ├── best_model.pth
-│   └── lulc_model_final.pth
-├── lulc_results16/             # Output directory (training run 3)
-└── presentable/
-    └── show/                   # Presentation-ready outputs
-```
+Road is merged into `building` at load time — see [`data/README.md`](data/README.md).
 
 ---
 
-## 🚀 Quick Start
+> **Migrating from the old flat layout?** Read
+> [`MIGRATION.md`](MIGRATION.md) first — it covers moving your existing
+> `dataset/reference_masks/` across and why `dataset/images/` must be
+> regenerated.
 
-### 1. Installation
+## Quick start
 
 ```bash
-# Core dependencies
-pip install torch torchvision torchgeo segmentation-models-pytorch
+git clone https://github.com/rbasil631/lulc-classification.git
+cd lulc-classification
 
-# Data & visualization
-pip install rasterio matplotlib seaborn tqdm scipy scikit-learn albumentations
-
-# Explainable AI
-pip install grad-cam shap
-
-# Metrics
-pip install torchmetrics
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -e ".[pretrained,xai]"
 ```
 
-**Note**: Tested with PyTorch 2.0+, CUDA 11.8+ (optional but recommended for GPU acceleration)
-
-### 2. Prepare Your Data
-
-#### Option A: Download Sentinel-2 from Google Earth Engine
-1. Visit [Google Earth Engine Code Editor](https://code.earthengine.google.com)
-2. Copy the GEE script from the **GEE SCRIPT** section in `final.py`
-3. Replace coordinates with your area of interest (AOI)
-4. Export as GeoTIFF to Google Drive
-5. Download to your local machine
-
-#### Option B: Use Pre-existing GeoTIFF
-If you already have a 6-band Sentinel-2 composite, place it at the path specified in CONFIG.
-
-### 3. Configure the Pipeline
-
-Edit the `CONFIG` dictionary at the top of `final.py`:
-
-```python
-CONFIG = {
-    "city_tif"           : r"C:\path\to\your\6bands.tif",      # Input Sentinel-2 GeoTIFF
-    "output_dir"         : "lulc_results/",                     # Output directory
-    "patch_size"         : 256,                                  # Patch size (pixels)
-    "stride"             : 128,                                  # Overlap stride
-    "batch_size"         : 2,                                    # Training batch size
-    "epochs"             : 5,                                    # Number of epochs
-    "lr"                 : 1e-4,                                 # Learning rate
-    "early_stop_patience": 2,                                    # Early stopping patience
-    "num_bands"          : 6,                                    # Always 6 for Sentinel-2
-    "rgb_indices"        : [2, 1, 0],                            # Band indices for RGB viz
-    "mask_dir"           : r"c:\path\to\reference_masks",       # Reference masks (optional)
-    "xai_samples"        : 5,                                    # Number of patches for XAI
-}
-```
-
-### 4. Run Training
+Get imagery (see [`data/README.md`](data/README.md) for the GEE export), point
+the config at it, then:
 
 ```bash
-python final.py
+python scripts/train.py --config configs/train.yaml
+python scripts/infer.py --config configs/inference.yaml --input data/raw/new_city.tif
 ```
 
-**Pipeline steps**:
-1. ✅ Load & normalize Sentinel-2 data
-2. ✅ Generate patches (tiling)
-3. ✅ Build model (UNet++ with pretrained ResNet50)
-4. ✅ Fine-tune on reference masks (if provided)
-5. ✅ Evaluate (IoU, F1 per class)
-6. ✅ Explainability analysis (SegGradCAM, SHAP, gradient attribution)
-7. ✅ City-wide inference (sliding window with overlap averaging)
-8. ✅ Post-processing (median filter for noise removal)
-9. ✅ Save georeferenced outputs
-
-### 5. Run Inference on New AOI
-
-For a new area of interest without retraining:
-
-```bash
-# Edit CONFIG in inference.py
-CONFIG = {
-    "model_path"   : r"C:\path\to\trained\best_model.pth",
-    "input_tif"    : r"C:\path\to\new_city.tif",
-    "output_dir"   : "inference_results/",
-    ...
-}
-
-python inference.py
-```
-
-**Key difference**: Inference performs **per-AOI normalization**—statistics are computed from the new image's own pixels, ensuring consistent results regardless of absolute reflectance values.
+No GPU? Everything runs on CPU — slowly. Start with `--skip-xai` and a small
+`epochs` value to confirm the plumbing works before committing to a full run.
 
 ---
 
-## 📈 Model Architecture
+## Repository layout
 
-### Encoder: ResNet50 (TorchGeo SSL4EO)
-- Pretrained on 1M Sentinel-2 patches via self-supervised learning
-- Frozen batch norm for stable fine-tuning
-- 6-band input → 3-band conv1 adapted via interpolation or weight averaging
-- Progressive skip connections (C1, C2, C3, C4, C5)
-
-### Decoder: UNet++
-- Multi-scale dense skip connections for feature refinement
-- Reduces checkerboard artifacts common in standard U-Net
-- Output: (B, 6, H, W) logits for 6 LULC classes
-
-### Loss Function
 ```
-Combined Loss = 0.5 × Cross-Entropy + 0.5 × Dice Loss
-```
-Balanced weighting ensures both pixel-level accuracy and class-level stability.
-
----
-
-## 📊 Evaluation Metrics
-
-The pipeline reports per-class metrics:
-
-- **Intersection-over-Union (IoU)**: $\text{IoU} = \frac{\text{TP}}{\text{TP + FP + FN}}$
-- **F1-Score**: $F_1 = 2 \times \frac{\text{Precision} \times \text{Recall}}{\text{Precision + Recall}}$
-- **Mean IoU (mIoU)**: Average across all classes
-- **Confusion Matrix**: Pixel-level classification breakdown
-
-Example output:
-```
-  Class           IoU        F1
-  ───────────────────────────────
-  background     0.8934     0.9412
-  building       0.7823     0.8675
-  water          0.9201     0.9543
-  barren         0.6543     0.7234
-  forest         0.8876     0.9123
-  agriculture    0.8234     0.8901
-
-  mIoU: 0.8301  |  Mean F1: 0.8481
+lulc-classification/
+├── configs/
+│   ├── train.yaml                  # all training hyperparameters and paths
+│   └── inference.yaml              # inference paths and knobs
+├── scripts/
+│   ├── train.py                    # fine-tune + evaluate + XAI + map
+│   ├── infer.py                    # run a checkpoint on a new AOI
+│   ├── make_patches.py             # tile a GeoTIFF for annotation
+│   └── export_s2_gee.js            # Google Earth Engine export
+├── src/lulc/
+│   ├── config.py                   # YAML → dataclass, path resolution
+│   ├── constants.py                # class schema, band definitions
+│   ├── losses.py                   # cross-entropy + Dice
+│   ├── utils.py                    # device, seeding, dir helpers
+│   ├── data/
+│   │   ├── raster.py               # read, normalize, tile, load masks
+│   │   ├── dataset.py              # lazy patch datasets
+│   │   └── transforms.py           # augmentation (albumentations 1.x/2.x)
+│   ├── models/unetpp.py            # UNet++/ResNet-50, SSL4EO weight loading
+│   ├── training/
+│   │   ├── trainer.py              # fine-tuning, disjoint split, sampler
+│   │   └── evaluate.py             # IoU, F1, confusion matrix
+│   ├── inference/predict.py        # sliding-window inference
+│   ├── xai/
+│   │   ├── gradcam.py              # SegGradCAM
+│   │   ├── attribution.py          # gradient / occlusion / SHAP
+│   │   └── plots.py                # shared chart helpers
+│   └── viz/maps.py                 # GeoTIFF, colour map, distribution chart
+├── data/README.md                  # how to get imagery; rasters gitignored
+├── docs/methodology.md             # design decisions and known limitations
+├── tools/cleanup_old_repo.sh       # retire the old flat layout
+└── outputs/                        # run artifacts (gitignored)
 ```
 
 ---
 
-## 🧠 Explainable AI (XAI)
+## Configuration
 
-Understanding *why* the model makes predictions is critical for geospatial applications. This pipeline provides three XAI methods:
+Everything lives in YAML. Paths resolve against the repo root unless absolute,
+so the same file works on Windows, Linux and Colab.
 
-### 1. SegGradCAM (Spatial Attribution)
-- Visualizes which spatial regions are important for each class
-- Generates heatmap overlays on RGB imagery
-- Helps identify false predictions
+```yaml
+image_tif: data/raw/city_s2_6band.tif
+mask_dir: data/patches/masks
+output_dir: outputs/train
 
-### 2. SHAP (Gradient Explainer)
-- Per-band importance via gradient-based SHAP
-- Quantifies which spectral bands drive predictions
-- Fallback to gradient×input if SHAP fails
-
-### 3. Gradient × Input (Universal Fallback)
-- Perturb-based attribution without external libraries
-- Band importance histogram + spatial heatmap
-- Per-class breakdown of band importance
-
-**Output visualizations**:
-- `shap_attribution.png` — Spatial importance heatmap
-- `band_importance.png` — Bar chart: which bands matter most
-- `band_importance_per_class.png` — Per-class band importance
-- `gradcam_<sample>.png` — Class activation maps
-
----
-
-## 💾 Output Files
-
-### Training Pipeline Outputs
-| File | Description |
-|------|-------------|
-| `best_model.pth` | Best model checkpoint (lowest validation loss) |
-| `lulc_map.tif` | Georeferenced prediction map (GeoTIFF) |
-| `lulc_map_color.png` | Colorized LULC map with legend |
-| `class_distribution.png` | Bar chart: % coverage per class |
-| `confusion_matrix.png` | Pixel-level confusion matrix |
-| `shap_attribution.png` | SHAP spatial attribution heatmap |
-| `band_importance.png` | Per-band importance bar chart |
-| `band_importance_per_class.png` | Per-class band importance breakdown |
-| `gradcam_sample_*.png` | Grad-CAM visualizations (one per XAI sample) |
-
-### Inference Pipeline Outputs
-| File | Description |
-|------|-------------|
-| `{stem}_lulc.tif` | Georeferenced prediction (preserves CRS + transform) |
-| `{stem}_lulc_color.png` | Colorized LULC with coverage statistics |
-| `{stem}_distribution.png` | Class distribution bar chart |
-| `{stem}_debug_rgb.png` | Normalized RGB preview of input |
-
-All files are saved to `output_dir` specified in CONFIG.
-
----
-
-## 🔧 Advanced Configuration
-
-### Hyperparameters
-```python
-"patch_size"        : 256         # Larger = more context but more memory
-"stride"            : 128         # Overlap = patch_size - stride
-"batch_size"        : 2           # Increase if VRAM allows
-"epochs"            : 5           # More epochs = longer training
-"lr"                : 1e-4        # Lower for fine-tuning
-"early_stop_patience": 2          # Stop if val loss doesn't improve
+patch_size: 256
+stride: 128
+batch_size: 2          # 8–16 on a 12 GB+ GPU
+epochs: 20
+lr: 0.001
+freeze_encoder: true
 ```
 
-### Model Selection
-To use a different encoder:
-```python
-model = smp.UnetPlusPlus(
-    encoder_name='resnet101',      # Try: resnet18, resnet50, resnet101, etc.
-    encoder_weights='imagenet',    # Or 'ssl4eo' if available
-    in_channels=6,
-    classes=6,
-)
-```
+The two knobs worth understanding before you change anything else:
 
-### Custom Data Normalization
-Edit `normalize_data()` to use custom statistics:
-```python
-S2_MEAN = [your_band_means]        # Per-band statistics
-S2_STD  = [your_band_stds]
-```
+**`freeze_encoder`** — the SSL4EO encoder was trained on millions of Sentinel-2
+scenes. A few hundred local patches will overwrite that with AOI-specific noise
+if you unfreeze it. Leave it `true` unless you have thousands of labelled
+patches.
+
+**`stride`** — controls training-grid overlap and inference smoothness. Lower
+means more patches, slower runs, softer tile seams. Validation always uses a
+non-overlapping grid regardless.
 
 ---
 
-## 📋 Requirements
+## Outputs
 
-### Hardware
-- **GPU** (recommended): NVIDIA GPU with 8GB+ VRAM (tested on RTX 3060, 4060)
-- **CPU** (possible but slow): Multi-core processor for data loading
-
-### Software
-- Python 3.8+
-- PyTorch 2.0+
-- CUDA 11.8+ (optional)
-- See [Installation](#1-installation) for full dependency list
-
-### Data
-- Min 1 Sentinel-2 GeoTIFF (6 bands, any size)
-- Optional: Reference mask GeoTIFFs for fine-tuning
-- 2-3 GB disk space for a typical project
+| File | Contents |
+|------|----------|
+| `lulc_map.tif` | Georeferenced class map, CRS and transform preserved |
+| `lulc_map.png` | Colourized map with legend and coverage box |
+| `class_distribution.png` | Per-class coverage bar chart |
+| `confusion_matrix.png` | Reference vs. predicted |
+| `gradcam_patch_*.png` | Per-class spatial attention |
+| `band_importance_per_class_*.png` | Band attribution, one per method |
+| `best_model.pth` | Best-validation-loss checkpoint |
 
 ---
 
-## 🐛 Troubleshooting
+## Method
 
-| Issue | Solution |
-|-------|----------|
-| **CUDA out of memory** | Reduce `batch_size`, `patch_size`, or enable CPU-only mode |
-| **Model not improving** | Reduce `lr` or increase `epochs`; check reference masks for quality |
-| **XAI fails / imports missing** | Fall back to gradient×input; install `pip install grad-cam shap` |
-| **GeoTIFF missing CRS** | Ensure input GeoTIFF has valid CRS; rasterio will preserve it |
-| **Inference results look wrong** | Verify per-AOI normalization—check `normalize_per_aoi()` statistics |
-| **SHAP taking too long** | Reduce `xai_samples`; gradient×input fallback is faster |
+| Component | Choice |
+|-----------|--------|
+| Encoder | ResNet-50, SSL4EO Sentinel-2 MoCo weights (ImageNet fallback) |
+| Decoder | UNet++ |
+| Loss | 0.5 × cross-entropy (label smoothing 0.1) + 0.5 × Dice |
+| Optimizer | Adam + cosine annealing, gradient clipping at 1.0 |
+| Sampling | Weighted by inverse dominant-class frequency |
+| Augmentation | Flips, rot90, brightness/contrast, Gaussian noise, coarse dropout, sharpen |
+| Normalization | Per-scene z-score over valid pixels |
+| Inference | Sliding window, logit averaging, median filter |
 
----
-
-## 📚 Key Design Decisions
-
-1. **Per-AOI Normalization** (Inference)
-   - Statistics computed from the *new* image's own pixels, not training data
-   - Ensures consistent results across cities with different reflectance ranges
-
-2. **Overlap Averaging**
-   - Predictions averaged across overlapping patches during inference
-   - Reduces edge artifacts and improves spatial smoothness
-
-3. **Median Filter Post-Processing**
-   - Removes salt-and-pepper noise (isolated misclassified pixels)
-   - Kernel size: 5×5 (adjustable)
-
-4. **Lazy Patch Loading**
-   - Patches extracted on-the-fly during training/inference
-   - Reduces memory footprint; enables large-scale processing
-
-5. **Early Stopping**
-   - Monitor validation loss with configurable patience
-   - Prevents overfitting to reference masks
-
-6. **Weights-Only Loading** (`weights_only=True`)
-   - PyTorch best practice for secure model deserialization
-   - Prevents arbitrary code execution from untrusted checkpoints
+Rationale and known limitations: [`docs/methodology.md`](docs/methodology.md).
 
 ---
 
-## 📖 References
+## Notes on this version
 
-- **TorchGeo**: [pytorch.org/vision/main/io.html](https://pytorch.org/vision/main/io.html)
-- **SSL4EO-S12**: Self-supervised learning on Sentinel-2
-- **segmentation-models-pytorch**: [smp.readthedocs.io](https://smp.readthedocs.io)
-- **Grad-CAM**: Selvaraju et al., "Grad-CAM: Visual Explanations from Deep Networks via Gradient-based Localization"
-- **SHAP**: Lundberg & Lee, "A Unified Approach to Interpreting Model Predictions"
+This is a restructured rewrite of the original single-file pipeline
+(`final.py` / `inference.py`). Behavioural changes worth knowing about:
 
----
-
-## 📝 Usage Examples
-
-### Example 1: Train on Aligarh with Reference Masks
-```python
-CONFIG = {
-    "city_tif"     : r"C:\LULC\6bands.tif",
-    "mask_dir"     : r"C:\LULC\aligarh_masks",
-    "output_dir"   : "lulc_results_aligarh/",
-    "epochs"       : 10,
-    "batch_size"   : 4,
-}
-```
-
-### Example 2: Inference on New City (No Fine-tuning)
-```python
-# inference.py CONFIG
-"model_path"  : r"C:\lulc_results\best_model.pth",
-"input_tif"   : r"C:\Downloads\NewCity_S2.tif",
-"output_dir"  : "inference_results_newcity/",
-```
-
-### Example 3: Export Results for QGIS
-```bash
-# All outputs (.tif, .png) can be directly imported into QGIS
-# GeoTIFF preserves CRS → automatic spatial alignment
-```
+- **`corrected_xai.py` was reconstructed.** The original `final.py` imported
+  it, but it was never committed — only a `.pyc` survived. `xai/attribution.py`
+  reproduces its three methods from the surviving bytecode. Regenerate figures
+  rather than comparing against old ones.
+- **Validation split fixed.** The previous split re-added overlapping training
+  coordinates after holding out validation patches, so validation loss was
+  partly measuring memorization. Training patches that intersect a validation
+  window are now dropped.
+- **Albumentations 1.x/2.x.** The old code called the 1.x API against a pinned
+  2.0.8, which crashed on `GaussNoise(var_limit=…)`. Both are now handled.
+- **Checkpoints load with `weights_only=True`.** A `.pth` is untrusted input.
+- **Metrics now score held-out patches only.** `train.py` recomputes the
+  split deterministically from `seed` and passes it to `evaluate()`, so the
+  printed IoU/F1 no longer include patches the decoder just trained on.
+- **`dataset/images/` from the old repo is unusable** — single-band `uint8`,
+  not 6-band. See [`data/README.md`](data/README.md). The reference masks are
+  fine and worth preserving.
 
 ---
 
-## 🤝 Contributing
+## Requirements
 
-Issues, improvements, and alternative architectures welcome! 
-- Test on your own AOI and share results
-- Propose XAI enhancements
-- Optimize for different Sentinel-2 bands
+Python ≥ 3.10, PyTorch ≥ 2.0. CUDA optional but strongly recommended —
+`grad-cam` and `shap` are optional extras and degrade gracefully when absent.
 
----
+## Author
 
-## 👤 Author
-
-**Syed Basil Rizvi**  
-*Land Use Land Cover Semantic Segmentation + Explainable AI*
-
----
-
-## 📄 License
-
-This project is provided as-is for educational and research purposes. Sentinel-2 data is publicly available under the [Copernicus Program](https://www.copernicus.eu/).
-
----
-
-## ✨ Highlights
-
-- ✅ Transfer learning with TorchGeo SSL4EO weights
-- ✅ Fine-tuning on local reference masks
-- ✅ Multi-scale UNet++ decoder
-- ✅ 3 interpretability methods (SegGradCAM, SHAP, Gradient×Input)
-- ✅ Georeferenced outputs (CRS + transform preserved)
-- ✅ Per-AOI normalization for robust cross-city inference
-- ✅ Overlap-averaged sliding window inference
-- ✅ Comprehensive visualization suite
-
----
-
-**Happy mapping! 🗺️**
+Syed Basil Rizvi — B.Tech Artificial Intelligence, minor project.
