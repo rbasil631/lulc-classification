@@ -1,0 +1,31 @@
+# Training configuration.
+# Paths are relative to the repository root unless absolute.
+
+image_tif: data/raw/city_s2_6band.tif    # 6-band Sentinel-2 composite
+mask_dir: data/patches/masks             # reference masks, one per patch (null to skip)
+output_dir: outputs/train
+
+patch_size: 256
+stride: 128                # training grid overlap; validation uses a disjoint grid
+batch_size: 2              # raise to 8-16 on a >=12 GB GPU
+epochs: 20
+lr: 0.001                  # decoder-only, so a higher LR is safe
+early_stop_patience: 5
+val_fraction: 0.1
+
+num_bands: 6
+num_classes: 6
+
+encoder_weights: imagenet  # null for random init / fully offline runs
+use_torchgeo: true         # SSL4EO Sentinel-2 encoder; falls back if unavailable
+
+freeze_encoder: true       # keep SSL4EO features; set false only with lots of labels
+encoder_warmup_batches: 1  # low-LR encoder touch-up after the decoder converges
+label_smoothing: 0.1
+grad_clip: 1.0
+
+seed: 42
+num_workers: 0             # >0 breaks on Windows without an __main__ guard
+
+xai_samples: 5
+rgb_indices: [2, 1, 0]

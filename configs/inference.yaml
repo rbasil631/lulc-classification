@@ -1,0 +1,18 @@
+# Inference configuration for a new area of interest.
+# Paths are relative to the repository root unless absolute.
+
+model_path: outputs/train/best_model.pth
+input_tif: data/raw/new_aoi_6band.tif
+output_dir: outputs/inference
+
+num_bands: 6
+num_classes: 6
+patch_size: 256
+stride: 128                # patch_size - stride = overlap; smaller stride = smoother
+batch_size: 8              # raise if VRAM allows
+median_size: 5             # post-processing kernel; 1 disables
+num_workers: 0
+
+rgb_indices: [2, 1, 0]
+save_debug_rgb: true
+output_dpi: 200
