@@ -50,6 +50,9 @@ class TrainConfig:
     num_workers: int = 0
 
     xai_samples: int = 5
+    xai_methods: list[str] = field(
+        default_factory=lambda: ["gradient", "occlusion", "shap"]
+    )
     rgb_indices: list[int] = field(default_factory=lambda: [2, 1, 0])
 
 

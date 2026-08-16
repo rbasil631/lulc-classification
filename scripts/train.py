@@ -24,7 +24,7 @@ from lulc.data.raster import load_masks, tile_geotiff
 from lulc.models import build_model
 from lulc.training import evaluate, fine_tune
 from lulc.training.trainer import build_disjoint_split
-from lulc.utils import ensure_dir, get_device, set_seed
+from lulc.utils import ensure_dir, free_cuda, get_device, set_seed
 from lulc.viz.maps import (
     print_summary,
     save_class_distribution,
@@ -105,6 +105,9 @@ def main() -> int:
     if not args.skip_map:
         from lulc.inference import sliding_window_predict
 
+        # XAI holds large autograd graphs; release them before inference so a
+        # heavy attribution pass cannot starve the full-scene pass of VRAM.
+        free_cuda()
         print("\n[+] Full-scene inference")
         pred = sliding_window_predict(
             model,

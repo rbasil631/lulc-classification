@@ -8,7 +8,8 @@ Method       Speed   Character
 gradient     fast    Good relative ranking; sensitive to gradient saturation.
 occlusion    slow    Directly interpretable ("logit drops X when band is
                      removed"), and needs no gradients at all.
-SHAP         medium  Shapley-axiom grounded; requires the ``shap`` package.
+SHAP         medium  Shapley-axiom grounded; requires the ``shap`` package and
+                     by far the most VRAM.
 ===========  ======  ==========================================================
 
 All three L1-normalize per class, so each class's bars sum to 1 and classes are
@@ -155,12 +156,23 @@ def occlusion_band_importance(
 
 
 def shap_band_importance(
-    model, patch: np.ndarray, cfg, num_classes: int, class_names, device, verbose: bool = True
+    model,
+    patch: np.ndarray,
+    cfg,
+    num_classes: int,
+    class_names,
+    device,
+    verbose: bool = True,
+    nsamples: int = 8,
 ) -> np.ndarray | None:
     """SHAP ``GradientExplainer`` attribution, aggregated per band.
 
     Returns ``None`` if ``shap`` is not installed or the explainer fails - the
     caller should fall back to the gradient result rather than abort the run.
+
+    ``nsamples`` drives peak VRAM: the explainer holds that many full forward
+    and backward graphs at 256x256 simultaneously. 32 overflows a 6 GB card on
+    a UNet++/ResNet-50, so the default is deliberately low.
     """
     try:
         import shap
@@ -173,6 +185,7 @@ def shap_band_importance(
         print("  SHAP GradientExplainer (this takes a moment) ...")
 
     n_bands = patch.shape[0]
+    tensor = wrapped = explainer = None
     try:
         tensor = torch.from_numpy(patch.copy()).unsqueeze(0).float().to(device)
 
@@ -188,7 +201,7 @@ def shap_band_importance(
 
         wrapped = _MeanLogit(model).to(device).eval()
         explainer = shap.GradientExplainer(wrapped, tensor)
-        shap_values = explainer.shap_values(tensor, nsamples=32)
+        shap_values = explainer.shap_values(tensor, nsamples=nsamples)
 
         if isinstance(shap_values, list):
             per_class = np.stack([np.abs(sv[0]).sum(axis=(1, 2)) for sv in shap_values])
@@ -197,11 +210,16 @@ def shap_band_importance(
             per_class = np.abs(arr).sum(axis=(1, 2)).T
 
         per_class = per_class[:num_classes, :n_bands]
-        free_cuda()
     except Exception as exc:
         if verbose:
             print(f"  SHAP computation failed ({exc}) - skipping.")
         return None
+    finally:
+        # Release GPU memory on every path, including OOM. Without this the
+        # allocator keeps SHAP's blocks cached and the next stage (full-scene
+        # inference) fails with OOM on a card that is actually free.
+        del tensor, wrapped, explainer
+        free_cuda()
 
     norm = _normalize_rows(per_class)
     plot_per_class_importance(
@@ -225,14 +243,20 @@ def run_band_importance(
     num_classes: int,
     class_names,
     device,
-    methods=("gradient", "occlusion", "shap"),
+    methods=None,
     verbose: bool = True,
 ) -> dict[str, np.ndarray | None]:
     """Run the selected attribution methods on one representative patch.
 
+    ``methods`` defaults to ``cfg.xai_methods`` when present, so the set can be
+    trimmed from YAML on memory-constrained machines.
+
     Returns a dict keyed by method name; a value of ``None`` means that method
     was unavailable or failed.
     """
+    if methods is None:
+        methods = tuple(getattr(cfg, "xai_methods", ("gradient", "occlusion", "shap")))
+
     y, x = coords[len(coords) // 2]
     p = cfg.patch_size
     patch = data[:, y : y + p, x : x + p].copy()
@@ -259,4 +283,6 @@ def run_band_importance(
         except Exception as exc:
             print(f"  {name} attribution failed: {exc}")
             results[name] = None
+        finally:
+            free_cuda()
     return results
