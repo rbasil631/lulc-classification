@@ -20,7 +20,7 @@ import torch
 
 from lulc.config import load_train_config
 from lulc.constants import CLASS_NAMES, NUM_CLASSES
-from lulc.data.raster import load_masks, tile_geotiff
+from lulc.data.raster import assemble_label_map, load_masks, read_raster, tile_geotiff
 from lulc.models import build_model
 from lulc.training import evaluate, fine_tune
 from lulc.training.trainer import build_disjoint_split
@@ -31,7 +31,7 @@ from lulc.viz.maps import (
     save_lulc_geotiff,
     save_lulc_png,
 )
-from lulc.xai import run_band_importance, run_gradcam
+from lulc.xai import run_band_importance, run_gradcam, run_spectral_analysis
 
 
 def parse_args() -> argparse.Namespace:
@@ -98,7 +98,20 @@ def main() -> int:
     if not args.skip_xai:
         print("\n[6/6] Explainability")
         run_gradcam(model, data, coords, cfg, CLASS_NAMES, device, seed=cfg.seed)
-        run_band_importance(model, data, coords, cfg, cfg.num_classes, CLASS_NAMES, device)
+        run_band_importance(
+            model, data, coords, cfg, cfg.num_classes, CLASS_NAMES, device, masks=masks
+        )
+
+        # Model-free reference: what the imagery itself says. Attribution
+        # explains the model; this says whether the model should be believed.
+        if masks is not None:
+            raw, _ = read_raster(cfg.image_tif)
+            label_map = assemble_label_map(masks, coords, cfg.patch_size,
+                                           info.height, info.width)
+            run_spectral_analysis(
+                raw, label_map, cfg.num_classes, CLASS_NAMES, cfg.output_dir
+            )
+            del raw, label_map
     else:
         print("\n[6/6] Explainability - skipped (--skip-xai)")
 

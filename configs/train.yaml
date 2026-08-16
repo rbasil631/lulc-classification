@@ -27,8 +27,9 @@ grad_clip: 1.0
 seed: 42
 num_workers: 0             # >0 breaks on Windows without an __main__ guard
 
-xai_samples: 5
-# Drop 'shap' if VRAM is tight - it is the heaviest of the three and the
-# gradient/occlusion pair already cross-checks the ranking.
-xai_methods: [gradient, occlusion, shap]
+xai_samples: 5             # number of GradCAM figures
+xai_patches_per_class: 6   # patches scored per class; raise for steadier numbers
+# occlusion is the most interpretable, gradient the cheapest, integrated the
+# most rigorous (completeness-checked). Drop any if a run is too slow.
+xai_methods: [occlusion, gradient, integrated]
 rgb_indices: [2, 1, 0]

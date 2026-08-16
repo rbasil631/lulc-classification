@@ -49,9 +49,10 @@ class TrainConfig:
     seed: int = 42
     num_workers: int = 0
 
-    xai_samples: int = 5
+    xai_samples: int = 5                 # GradCAM figures
+    xai_patches_per_class: int = 6        # patches scored per class in attribution
     xai_methods: list[str] = field(
-        default_factory=lambda: ["gradient", "occlusion", "shap"]
+        default_factory=lambda: ["occlusion", "gradient", "integrated"]
     )
     rgb_indices: list[int] = field(default_factory=lambda: [2, 1, 0])
 

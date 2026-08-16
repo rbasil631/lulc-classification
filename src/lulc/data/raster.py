@@ -166,3 +166,25 @@ def load_masks(
     if verbose:
         print(f"  Loaded {len(masks)} reference masks from {Path(mask_dir).name}/")
     return masks
+
+
+def assemble_label_map(
+    masks: np.ndarray,
+    coords: list[tuple[int, int]],
+    patch_size: int,
+    height: int,
+    width: int,
+) -> np.ndarray:
+    """Stitch patch masks back into a single full-scene label raster.
+
+    Patches overlap when ``stride < patch_size``; later writes win, which is
+    harmless because overlapping tiles carry identical labels for the shared
+    pixels (they were cut from one source raster).
+
+    Used by the spectral analysis, which needs labels aligned to the full
+    unnormalized scene rather than per patch.
+    """
+    label_map = np.zeros((height, width), dtype="uint8")
+    for mask, (y, x) in zip(masks, coords):
+        label_map[y : y + patch_size, x : x + patch_size] = mask
+    return label_map
