@@ -44,6 +44,7 @@ def plot_per_class_importance(
     ax.set_title(title, fontsize=13, fontweight="bold")
     ax.legend(title="Band", fontsize=9, ncol=3, loc="upper right")
     ax.grid(axis="y", color="#333333", alpha=0.2, linestyle="--")
+    ax.axhline(0, color="#333333", linewidth=0.8)
     fig.tight_layout()
 
     out = ensure_dir(output_dir) / filename
@@ -81,6 +82,55 @@ def plot_aggregate_importance(
         )
     fig.tight_layout()
 
+    out = ensure_dir(output_dir) / filename
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {out}")
+    return str(out)
+
+
+def plot_importance_heatmap(
+    results: dict,
+    class_names,
+    band_names,
+    output_dir,
+    filename: str,
+) -> str:
+    """One panel per method: classes x bands, diverging around zero.
+
+    A heatmap makes cross-method agreement legible at a glance in a way that
+    three separate grouped bar charts do not - the eye compares rows of colour
+    far better than it compares bar heights across figures.
+    """
+    methods = list(results)
+    n = len(methods)
+    fig, axes = plt.subplots(1, n, figsize=(5.2 * n, 3.6), squeeze=False)
+
+    # Shared symmetric scale so panels are directly comparable.
+    vmax = max(float(np.abs(v).max()) for v in results.values()) or 1.0
+
+    for ax, name in zip(axes[0], methods):
+        arr = results[name]
+        im = ax.imshow(arr, cmap="RdBu_r", vmin=-vmax, vmax=vmax, aspect="auto")
+        ax.set_xticks(range(len(band_names)))
+        ax.set_xticklabels(band_names, rotation=35, ha="right", fontsize=9)
+        ax.set_yticks(range(len(class_names)))
+        ax.set_yticklabels(class_names if ax is axes[0][0] else [], fontsize=9)
+        ax.set_title(name, fontsize=11, fontweight="bold")
+        for i in range(arr.shape[0]):
+            for j in range(arr.shape[1]):
+                ax.text(
+                    j, i, f"{arr[i, j]:+.2f}", ha="center", va="center",
+                    fontsize=7,
+                    color="black" if abs(arr[i, j]) < vmax * 0.55 else "white",
+                )
+        fig.colorbar(im, ax=ax, fraction=0.046)
+
+    fig.suptitle(
+        "Per-Class Band Attribution - method comparison (red supports class)",
+        fontsize=13, fontweight="bold",
+    )
+    fig.tight_layout()
     out = ensure_dir(output_dir) / filename
     fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig)
